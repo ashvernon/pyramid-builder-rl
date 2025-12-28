@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+
+# Logs & outputs
+logs/
+*.log
+*.jsonl
+
+# RL artifacts
+checkpoints/
+replays/
+runs/
+
+# OS
+.DS_Store
+Thumbs.db

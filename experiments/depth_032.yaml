@@ -1,0 +1,16 @@
+# Experiment config (overrides config.yaml as needed)
+name: depth_032
+
+sim:
+  n_layers: 32
+  t_max: 600
+  ramp_build_rate: 0.10     # was 0.02
+  ramp_dismantle_rate: 0.02 # keep explicit
+
+rl:
+  seed: 1
+  total_steps: 250000
+  eval_every: 10000
+  depth: 32
+  width: 256
+  lr: 0.0003

@@ -1,0 +1,50 @@
+# Global defaults for the pyramid sim + RL
+sim:
+  n_layers: 32
+  t_max: 600
+  workers_total: 120
+  friction: 0.35
+  heat: 0.2
+  ramp_dismantle_rate: 0.02
+
+
+  # Stock caps for normalization
+  q_max: 5000
+  transit_max: 1500
+  site_max: 2500
+
+  # Productivity
+  alpha_q: 1.2
+  alpha_h: 1.0
+  alpha_p: 0.9
+
+  # Ramp
+  ramp_build_rate: 0.02
+  ramp_type_base: [1.0, 0.95, 0.90, 0.85]  # none, straight, zigzag, spiral
+  ramp_type_k:    [0.00, 0.25, 0.18, 0.12]
+
+rl:
+  seed: 1
+  gamma: 0.99
+  batch_size: 256
+  replay_size: 200000
+  warmup_steps: 5000
+  total_steps: 300000
+  eval_every: 10000
+
+  # HER
+  her_k: 4
+
+  # Epsilon-greedy (discrete actions for MVP)
+  eps_start: 1.0
+  eps_end: 0.05
+  eps_decay_steps: 150000
+
+  # Network
+  width: 256
+  depth: 32
+  lr: 0.0003
+
+  # Target network updates
+  target_update_every: 200
+  target_tau: 1.0

@@ -1,0 +1,14 @@
+# Experiment config (overrides config.yaml as needed)
+name: depth_004
+
+sim:
+  n_layers: 32
+  t_max: 600
+
+rl:
+  seed: 1
+  total_steps: 250000
+  eval_every: 10000
+  depth: 4
+  width: 256
+  lr: 0.0003
