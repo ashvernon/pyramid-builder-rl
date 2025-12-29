@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from typing import Optional
+
 import yaml
 import numpy as np
+
+from sim.state import PyramidState
 
 from sim.env import PyramidEnv
 from sim.goals import vector_to_goal
@@ -27,6 +31,79 @@ def deep_update(base: dict, patch: dict) -> dict:
         else:
             base[k] = v
     return base
+
+
+def episode_phase_outcome(
+    state: Optional[PyramidState],
+    goal_vec: np.ndarray,
+    success: int,
+    tol_shape: float = 0.05,
+    tol_ramp: float = 0.05,
+) -> tuple[int, Optional[str], bool]:
+    """
+    Decode hierarchical construction phases for episode logging.
+
+    Phases are cumulative counts of completed milestones:
+    1. Foundation stability meets goal target
+    2. Ramp height + integrity meet goal target
+    3. Target layers stabilized/locked
+    4. Capstone placed (only if required by goal)
+    """
+
+    if state is None:
+        return 0, None, False
+
+    g = np.asarray(goal_vec, dtype=np.float32)
+    n = int(state.n_layers)
+    if g.shape[0] != n + 4:
+        raise ValueError(f"Goal vector has dim {g.shape[0]} but expected {n + 4}")
+
+    foundation_target = float(g[0])
+    ramp_height_target = float(g[1])
+    ramp_integrity_target = float(g[2])
+    target_shape = g[3:-1]
+    capstone_target = float(g[-1])
+
+    locks = np.asarray(
+        [1.0 if locked else float(state.layer_stability[i]) for i, locked in enumerate(state.layer_locked)],
+        dtype=np.float32,
+    )
+
+    foundation_ready = float(state.foundation_strength) >= foundation_target - tol_shape
+    ramp_ready = bool(
+        float(state.ramp_height) >= ramp_height_target - tol_ramp
+        and float(state.ramp_integrity) >= ramp_integrity_target - tol_ramp
+    )
+    shape_ready = bool(np.all(locks >= target_shape - tol_shape))
+    capstone_required = capstone_target > 0.0
+
+    phase_reached = 0
+    if foundation_ready:
+        phase_reached = 1
+    if foundation_ready and ramp_ready:
+        phase_reached = 2
+    if foundation_ready and ramp_ready and shape_ready:
+        phase_reached = 3
+    if capstone_required and foundation_ready and ramp_ready and shape_ready and state.capstone_placed:
+        phase_reached = 4
+
+    failure_reason: Optional[str] = None
+    if not success:
+        if not foundation_ready:
+            failure_reason = "foundation_unstable"
+        elif not ramp_ready:
+            failure_reason = "ramp_inadequate"
+        elif not shape_ready:
+            failure_reason = "shape_incomplete"
+        elif capstone_required and not state.capstone_placed:
+            failure_reason = "capstone_unreachable"
+
+    irreversible_error = bool(
+        (not foundation_ready and float(state.foundation_strength) < 0.5 * foundation_target)
+        or (float(state.ramp_integrity) < 0.25)
+    )
+
+    return phase_reached, failure_reason, irreversible_error
 
 
 def main() -> None:
@@ -262,12 +339,21 @@ def main() -> None:
                 }
             )
 
+        phase_reached, failure_reason, irreversible_error = episode_phase_outcome(
+            env.state,
+            goal,
+            ep_success,
+        )
+
         logger.log({
             "type": "episode",
             "episode": episode,
             "step": step,
             "ep_steps": ep_steps,
             "success": ep_success,
+            "phase_reached": int(phase_reached),
+            "phase_failure_reason": failure_reason,
+            "irreversible_error": bool(irreversible_error),
             "max_layer": info.get("max_layer", None),
             "final_ramp_height": float(info.get("ramp_height", 0.0)),
             "goal_ramp_required": goal_ramp_required,
