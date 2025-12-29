@@ -35,6 +35,9 @@ rl:
   # HER
   her_k: 4
 
+  # Goal diversity (small fraction of achieved-goal replay sampling)
+  goal_replay_fraction: 0.15
+
   # Epsilon-greedy (discrete actions for MVP)
   eps_start: 1.0
   eps_end: 0.05
@@ -48,3 +51,10 @@ rl:
   # Target network updates
   target_update_every: 200
   target_tau: 1.0
+
+  # Evaluation + capability probes
+  capability_probe_tiers: [12, 16, 20]
+  capability_probe_episodes: 3
+  random_policy_ceiling: 11
+  ramp_commit_height: 8.0
+  ramp_commit_early_frac: 0.3

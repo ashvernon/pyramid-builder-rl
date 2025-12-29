@@ -1,4 +1,3 @@
-\
 from __future__ import annotations
 
 import argparse
@@ -36,6 +35,10 @@ def main() -> None:
     sim_cfg = cfg["sim"]
     rl_cfg = cfg["rl"]
 
+    capability_probe_tiers = rl_cfg.get("capability_probe_tiers", [12, 16, 20])
+    capability_probe_episodes = int(rl_cfg.get("capability_probe_episodes", 3))
+    random_policy_ceiling = int(rl_cfg.get("random_policy_ceiling", 11))
+
     set_global_seed(int(rl_cfg["seed"]))
     env = PyramidEnv(sim_cfg, render=False, seed=int(rl_cfg["seed"]))
 
@@ -49,7 +52,15 @@ def main() -> None:
     if args.ckpt:
         agent.load(Path(args.ckpt))
 
-    metrics = run_eval(env, agent, n_episodes=100, fixed_goal_set=True)
+    metrics = run_eval(
+        env,
+        agent,
+        n_episodes=100,
+        fixed_goal_set=True,
+        capability_probe_tiers=capability_probe_tiers,
+        capability_probe_episodes=capability_probe_episodes,
+        random_policy_ceiling=random_policy_ceiling,
+    )
     print(metrics)
 
 

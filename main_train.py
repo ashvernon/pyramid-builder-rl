@@ -3,8 +3,10 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import yaml
+import numpy as np
 
 from sim.env import PyramidEnv
+from sim.goals import vector_to_goal
 from rl.replay import ReplayBuffer
 from rl.learner import GoalDQNAgent
 from rl.eval import run_eval
@@ -88,9 +90,18 @@ def main() -> None:
     warmup_steps = int(rl_cfg["warmup_steps"])
     batch_size = int(rl_cfg["batch_size"])
 
+    goal_replay_fraction = float(rl_cfg.get("goal_replay_fraction", 0.15))
+    goal_diversity_rng = np.random.default_rng(int(rl_cfg.get("seed", 1)) + 7)
+
     eps_start = float(rl_cfg["eps_start"])
     eps_end = float(rl_cfg["eps_end"])
     eps_decay = int(rl_cfg["eps_decay_steps"])
+
+    capability_probe_tiers = rl_cfg.get("capability_probe_tiers", [12, 16, 20])
+    capability_probe_episodes = int(rl_cfg.get("capability_probe_episodes", 3))
+    random_policy_ceiling = int(rl_cfg.get("random_policy_ceiling", 11))
+    ramp_commit_height = float(rl_cfg.get("ramp_commit_height", 8.0))
+    ramp_commit_early_frac = float(rl_cfg.get("ramp_commit_early_frac", 0.3))
 
     def epsilon(step: int) -> float:
         if step >= eps_decay:
@@ -103,9 +114,14 @@ def main() -> None:
 
     # ✅ Track best model by eval_success_rate
     best_success = -1.0
+    milestone_max_layer_logged = False
+    milestone_early_ramp_logged = False
 
     while step < total_steps:
-        obs, goal = env.reset()
+        override_goal = None
+        if len(replay) > 0 and goal_diversity_rng.random() < goal_replay_fraction:
+            override_goal = vector_to_goal(replay.sample_achieved_goal(), env.n_layers)
+        obs, goal = env.reset(goal=override_goal)
         done = False
         ep_steps = 0
         ep_success = 0
@@ -114,11 +130,16 @@ def main() -> None:
         ep_max_ramp_height = 0.0
         ep_mean_ramp_height_sum = 0.0
 
+        ep_max_layer = 0
+
         # episode-level ramp command stats
         ep_ramp_cmd_extend = 0
         ep_ramp_cmd_dismantle = 0
         ep_ramp_cmd_switch = 0
         ep_ramp_cmd_none = 0
+
+        early_commit_step_limit = int(env.t_max * ramp_commit_early_frac)
+        early_ramp_commit_step = None
 
         while not done and step < total_steps:
             eps = epsilon(step)
@@ -143,6 +164,22 @@ def main() -> None:
             ramp_h = float(info.get("ramp_height", 0.0))
             ep_max_ramp_height = max(ep_max_ramp_height, ramp_h)
             ep_mean_ramp_height_sum += ramp_h
+            ep_max_layer = max(ep_max_layer, int(info.get("max_layer", 0)))
+
+            if (
+                not milestone_max_layer_logged
+                and ep_max_layer > random_policy_ceiling
+            ):
+                milestone_max_layer_logged = True
+                logger.log(
+                    {
+                        "type": "milestone",
+                        "kind": "max_layer_exceeds_random_ceiling",
+                        "episode": episode,
+                        "step": step + 1,
+                        "max_layer": ep_max_layer,
+                    }
+                )
 
             # Decode ramp_cmd from action_id based on env design (ramp_cmds length = 4)
             # 0 none, 1 extend, 2 switch, 3 dismantle
@@ -161,6 +198,13 @@ def main() -> None:
             step += 1
             ep_success = max(ep_success, int(info.get("success", 0)))
 
+            if (
+                early_ramp_commit_step is None
+                and ep_steps <= early_commit_step_limit
+                and ramp_h >= ramp_commit_height
+            ):
+                early_ramp_commit_step = step
+
             if step >= warmup_steps and len(replay) >= batch_size:
                 batch = replay.sample(batch_size=batch_size)
                 losses = agent.update(batch)
@@ -174,7 +218,15 @@ def main() -> None:
                     })
 
             if step % int(rl_cfg["eval_every"]) == 0 and step >= warmup_steps:
-                metrics = run_eval(env, agent, n_episodes=30, fixed_goal_set=True)
+                metrics = run_eval(
+                    env,
+                    agent,
+                    n_episodes=30,
+                    fixed_goal_set=True,
+                    capability_probe_tiers=capability_probe_tiers,
+                    capability_probe_episodes=capability_probe_episodes,
+                    random_policy_ceiling=random_policy_ceiling,
+                )
                 logger.log({
                     "type": "eval",
                     "step": step,
@@ -197,6 +249,18 @@ def main() -> None:
             else None
         )
         ep_mean_ramp_height = (ep_mean_ramp_height_sum / max(1, ep_steps)) if ep_steps > 0 else 0.0
+
+        if early_ramp_commit_step is not None and not milestone_early_ramp_logged:
+            milestone_early_ramp_logged = True
+            logger.log(
+                {
+                    "type": "milestone",
+                    "kind": "early_ramp_commitment",
+                    "episode": episode,
+                    "step": int(early_ramp_commit_step),
+                    "ramp_height": float(ep_max_ramp_height),
+                }
+            )
 
         logger.log({
             "type": "episode",
