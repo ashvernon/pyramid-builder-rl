@@ -202,6 +202,7 @@ def main() -> None:
         done = False
         ep_steps = 0
         ep_success = 0
+        final_info: dict | None = None
 
         # episode-level ramp tracking (final can be 0 if dismantled late)
         ep_max_ramp_height = 0.0
@@ -273,7 +274,8 @@ def main() -> None:
             obs, goal = next_obs, next_goal
             ep_steps += 1
             step += 1
-            ep_success = max(ep_success, int(info.get("success", 0)))
+            ep_success = int(info.get("success", 0))
+            final_info = info
 
             if (
                 early_ramp_commit_step is None
@@ -341,11 +343,17 @@ def main() -> None:
                 }
             )
 
-        phase_reached, failure_reason, irreversible_error = episode_phase_outcome(
-            env.state,
-            goal,
-            ep_success,
-        )
+        if final_info is not None:
+            phase_reached = int(final_info.get("phase_reached", 0))
+            failure_reason = final_info.get("phase_failure_reason")
+            irreversible_error = bool(final_info.get("irreversible_error", False))
+            ep_success = int(final_info.get("success", ep_success))
+        else:
+            phase_reached, failure_reason, irreversible_error = episode_phase_outcome(
+                env.state,
+                goal,
+                ep_success,
+            )
 
         log_event(
             "episode",
@@ -357,8 +365,8 @@ def main() -> None:
                 "phase_reached": int(phase_reached),
                 "phase_failure_reason": failure_reason,
                 "irreversible_error": bool(irreversible_error),
-                "max_layer": info.get("max_layer", None),
-                "final_ramp_height": float(info.get("ramp_height", 0.0)),
+                "max_layer": (final_info or {}).get("max_layer", None),
+                "final_ramp_height": float((final_info or {}).get("ramp_height", 0.0)),
                 "goal_ramp_required": goal_ramp_required,
                 "max_ramp_height": float(ep_max_ramp_height),
                 "mean_ramp_height": float(ep_mean_ramp_height),
