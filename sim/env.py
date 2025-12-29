@@ -50,7 +50,7 @@ class PyramidEnv:
     def sample_action(self) -> int:
         return int(self.rng.integers(0, self.n_actions))
 
-    def reset(self, seed: Optional[int] = None) -> Tuple[np.ndarray, np.ndarray]:
+    def reset(self, seed: Optional[int] = None, goal: Optional[Goal] = None) -> Tuple[np.ndarray, np.ndarray]:
         if seed is not None:
             self.rng = np.random.default_rng(seed)
 
@@ -75,7 +75,7 @@ class PyramidEnv:
             fatigue=0.0,
             done=False,
         )
-        self.goal = sample_goal(self.state, self.rng)
+        self.goal = goal if goal is not None else sample_goal(self.state, self.rng)
         obs = self._obs_vec(self.state)
         g = goal_to_vec(self.goal, self.n_layers)
         return obs, g

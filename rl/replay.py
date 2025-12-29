@@ -105,3 +105,11 @@ class ReplayBuffer:
             done=done,
             reward=reward.astype(np.float32),
         )
+
+    def sample_achieved_goal(self) -> np.ndarray:
+        """Sample a previously achieved goal vector for diversity-based training goals."""
+
+        if self._size == 0:
+            raise ValueError("Cannot sample achieved goal from an empty replay buffer")
+        idx = int(self.rng.integers(0, self._size))
+        return self._achieved_next[idx].copy()

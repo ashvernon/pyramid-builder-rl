@@ -40,6 +40,19 @@ def goal_to_vec(goal: Goal, n_layers: int) -> np.ndarray:
     return v
 
 
+def vector_to_goal(target: np.ndarray, n_layers: int) -> Goal:
+    """Convert a goal vector back to a Goal dataclass.
+
+    This is useful for replay-sampled achieved states that should become
+    explicit goals (e.g., for diversity sampling).
+    """
+
+    arr = np.asarray(target, dtype=np.float32)
+    if arr.shape[0] != n_layers + 1:
+        raise ValueError(f"Goal vector has dim {arr.shape[0]} but expected {n_layers + 1}")
+    return Goal(kind=GOAL_KIND_MULTI, target=tuple(arr.tolist()))
+
+
 def achieved_goal_vec(state) -> np.ndarray:
     """
     Achieved goal includes:
@@ -95,6 +108,22 @@ def sample_goal(state, rng: np.random.Generator) -> Goal:
         kind=GOAL_KIND_MULTI,
         target=tuple(target.tolist())
     )
+
+
+def capability_probe_goal(n_layers: int, tier: int, ramp_scale: float = 0.6) -> Goal:
+    """Deterministic, capability-tiered goal used only for evaluation probes."""
+
+    tier = int(tier)
+    target_shape = np.zeros(n_layers, dtype=np.float32)
+    up_to = min(tier, n_layers)
+    target_shape[:up_to] = 1.0
+    if tier < n_layers:
+        target_shape[tier] = 0.6  # partial fill to avoid a cliff at the boundary
+
+    ramp_required = ramp_scale * float(tier)
+    target = np.concatenate([target_shape, [ramp_required]]).astype(np.float32)
+
+    return Goal(kind=GOAL_KIND_MULTI, target=tuple(target.tolist()))
 
 
 # ─────────────────────────────────────────────────────────────
