@@ -23,7 +23,7 @@ class PyramidEnv:
         self._ramp_cmds = [0, 1, 2, 3]  # none, extend, switch, dismantle
         self._switch_types = [1, 2, 3]  # straight, zigzag, spiral
 
-        self.obs_dim = 54
+        self.obs_dim = self._compute_obs_dim()
         self.goal_dim = goal_dim(self.n_layers)
         self.n_actions = len(self._alloc_presets) * len(self._ramp_cmds)
 
@@ -73,6 +73,14 @@ class PyramidEnv:
             friction=float(self.cfg["friction"]),
             heat=float(self.cfg.get("heat", 0.2)),
             fatigue=0.0,
+            foundation_stability=0.25,
+            foundation_locked=False,
+            foundation_timer=0,
+            foundation_strength=0.25,
+            ramp_integrity=0.5,
+            layer_stability=[0.0 for _ in range(self.n_layers)],
+            layer_locked=[False for _ in range(self.n_layers)],
+            capstone_placed=False,
             done=False,
         )
         self.goal = goal if goal is not None else sample_goal(self.state, self.rng)
@@ -110,6 +118,9 @@ class PyramidEnv:
             "site_stock": int(next_state.site_stock),
             "quarry_stock": int(next_state.quarry_stock),
             "action_id": int(action_id),
+            "foundation_strength": float(next_state.foundation_strength),
+            "ramp_integrity": float(next_state.ramp_integrity),
+            "capstone": int(next_state.capstone_placed),
         }
 
         self.state = next_state
@@ -135,11 +146,16 @@ class PyramidEnv:
         p_next = s.p[s.current_layer + 1] if s.current_layer < n - 1 else 0.0
 
         p_vec = np.asarray(s.p, dtype=np.float32)
+        lock_vec = np.asarray(
+            [1.0 if locked else float(s.layer_stability[i]) for i, locked in enumerate(s.layer_locked)],
+            dtype=np.float32,
+        )
 
         ramp_onehot = np.zeros(4, dtype=np.float32)
         ramp_onehot[s.ramp_type] = 1.0
         ramp_height_norm = s.ramp_height / max(1.0, float(n))
         ramp_eff = float(max(0.2, 1.0 - 0.2 * ramp_height_norm))
+        ramp_integrity = float(s.ramp_integrity)
 
         q_max = float(self.cfg["q_max"])
         tr_max = float(self.cfg["transit_max"])
@@ -158,16 +174,32 @@ class PyramidEnv:
         fatigue_norm = float(s.fatigue)
         damage_norm = 0.0
         idle_penalty_norm = 0.0
+        foundation_strength = float(s.foundation_strength)
+        foundation_locked = 1.0 if s.foundation_locked else 0.0
+        capstone_flag = 1.0 if s.capstone_placed else 0.0
 
         vec = np.concatenate([
             np.asarray([t_norm, heat_norm], dtype=np.float32),
             np.asarray([layer_idx_norm, p_cur, p_prev, p_next], dtype=np.float32),
             p_vec.astype(np.float32),
+            lock_vec.astype(np.float32),
             ramp_onehot,
-            np.asarray([ramp_height_norm, ramp_eff], dtype=np.float32),
+            np.asarray([ramp_height_norm, ramp_eff, ramp_integrity], dtype=np.float32),
             np.asarray([quarry_stock_norm, in_transit_norm, site_stock_norm, wq, wh, wp], dtype=np.float32),
-            np.asarray([friction_norm, fatigue_norm, damage_norm, idle_penalty_norm], dtype=np.float32),
+            np.asarray([
+                foundation_strength,
+                foundation_locked,
+                capstone_flag,
+                friction_norm,
+                fatigue_norm,
+                damage_norm,
+                idle_penalty_norm,
+            ], dtype=np.float32),
         ], axis=0)
 
         assert vec.shape[0] == self.obs_dim
         return vec
+
+    def _compute_obs_dim(self) -> int:
+        """Dynamic obs dimension derived from vectorized observation layout."""
+        return 26 + 2 * self.n_layers

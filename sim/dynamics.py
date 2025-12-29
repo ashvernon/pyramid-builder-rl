@@ -17,6 +17,8 @@ def ramp_efficiency(ramp_type: int, ramp_height_norm: float, base: list[float], 
 def step_state(state: PyramidState, action: dict, cfg: dict) -> PyramidState:
     s = replace(state)
     s.p = list(state.p)
+    s.layer_stability = list(state.layer_stability)
+    s.layer_locked = list(state.layer_locked)
 
     n = s.n_layers
     s.t += 1
@@ -31,9 +33,11 @@ def step_state(state: PyramidState, action: dict, cfg: dict) -> PyramidState:
     if ramp_cmd == 3:
         s.ramp_type = 0
         s.ramp_height = clamp(s.ramp_height - dismantle_rate, 0.0, float(n))
+        s.ramp_integrity = clamp(s.ramp_integrity - 0.08, 0.0, 1.0)
     elif ramp_cmd == 2:
         s.ramp_type = ramp_type
         s.fatigue = clamp(s.fatigue + 0.03, 0.0, 1.0)
+        s.ramp_integrity = clamp(s.ramp_integrity - 0.02, 0.0, 1.0)
     elif ramp_cmd == 1:
         s.ramp_type = s.ramp_type if s.ramp_type != 0 else 1
         s.ramp_height = clamp(
@@ -41,6 +45,9 @@ def step_state(state: PyramidState, action: dict, cfg: dict) -> PyramidState:
             0.0,
             float(n),
         )
+        s.ramp_integrity = clamp(s.ramp_integrity + 0.01, 0.0, 1.0)
+    else:
+        s.ramp_integrity = clamp(s.ramp_integrity + 0.005 * (1.0 - float(s.fatigue)), 0.0, 1.0)
 
     s.workers_quarry = int(action["wq"])
     s.workers_haul = int(action["wh"])
@@ -75,6 +82,56 @@ def step_state(state: PyramidState, action: dict, cfg: dict) -> PyramidState:
 
     if s.p[s.current_layer] >= 1.0 and s.current_layer < n - 1:
         s.current_layer += 1
+
+    # Hierarchical stability progression
+    if not s.foundation_locked:
+        base_load = 0.25 * s.p[0] + 0.1 * s.p[1] if n > 1 else 0.0
+        stability_delta = cfg.get("foundation_base_gain", 0.01)
+        stability_delta -= 0.004 * float(s.fatigue)
+        stability_delta -= 0.003 * base_load
+        stability_delta -= 0.002 * (s.ramp_height / max(1.0, float(n)))
+        stability_delta += 0.002 if ramp_cmd == 0 else -0.001
+        s.foundation_stability = clamp(s.foundation_stability + stability_delta, 0.0, 1.0)
+        if s.foundation_stability > cfg.get("foundation_lock_warmup", 0.5):
+            s.foundation_timer += 1
+        if s.foundation_stability >= cfg.get("foundation_lock_threshold", 0.85) and s.foundation_timer >= cfg.get("foundation_lock_horizon", 12):
+            s.foundation_locked = True
+            s.foundation_strength = float(s.foundation_stability)
+
+    if not s.foundation_locked:
+        s.foundation_strength = min(s.foundation_strength, s.foundation_stability)
+
+    s.ramp_integrity = clamp(
+        s.ramp_integrity - cfg.get("ramp_integrity_decay", 0.003) * (1.0 + float(s.fatigue)),
+        0.0,
+        1.0,
+    )
+
+    for i in range(n):
+        if s.p[i] >= 1.0 and not s.layer_locked[i]:
+            if i == 0 or s.layer_locked[i - 1]:
+                gain = cfg.get("layer_stabilize_rate", 0.04)
+                gain *= 0.5 + 0.5 * s.ramp_integrity
+                gain *= 0.6 + 0.4 * s.foundation_strength
+                s.layer_stability[i] = clamp(s.layer_stability[i] + gain, 0.0, 1.0)
+            else:
+                s.layer_stability[i] = clamp(s.layer_stability[i] - 0.02, 0.0, 1.0)
+
+            if s.layer_stability[i] >= cfg.get("layer_lock_threshold", 0.95):
+                s.layer_locked[i] = True
+        elif s.p[i] < 1.0 and not s.layer_locked[i]:
+            s.layer_stability[i] = clamp(s.layer_stability[i] - 0.01, 0.0, 1.0)
+
+    capstone_window = cfg.get("capstone_ramp_height", float(n) * 0.4)
+    capstone_integrity = cfg.get("capstone_integrity", 0.75)
+    capstone_foundation = cfg.get("capstone_foundation", 0.85)
+
+    if not s.capstone_placed:
+        all_locked = all(s.layer_locked)
+        ramp_ready = s.ramp_height <= capstone_window and s.ramp_integrity >= capstone_integrity
+        foundation_ready = s.foundation_strength >= capstone_foundation
+        if all_locked and ramp_ready and foundation_ready and ramp_cmd == 2:
+            s.capstone_placed = True
 
     intensity = (s.workers_quarry + s.workers_haul + s.workers_place) / max(1.0, float(s.workers_total))
     s.fatigue = clamp(s.fatigue + 0.0025 * intensity * (0.5 + heat), 0.0, 1.0)

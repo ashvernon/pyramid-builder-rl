@@ -68,6 +68,7 @@ class Renderer:
         lines = [
             f"t={state.t}  layer={state.current_layer}/{state.n_layers-1}  fatigue={state.fatigue:.2f}",
             f"quarry={state.quarry_stock}  site={state.site_stock}  wq/wh/wp={state.workers_quarry}/{state.workers_haul}/{state.workers_place}",
+            f"foundation={state.foundation_strength:.2f} locked={int(state.foundation_locked)} ramp_int={state.ramp_integrity:.2f} capstone={int(state.capstone_placed)}",
             f"goal_kind={goal.kind}  success={info.get('success', 0)}",
         ]
         y = 48

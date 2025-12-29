@@ -38,4 +38,15 @@ class PyramidState:
     heat: float                # 0..1
     fatigue: float             # 0..1
 
+    # Hierarchical stability trackers
+    foundation_stability: float
+    foundation_locked: bool
+    foundation_timer: int
+    foundation_strength: float
+
+    ramp_integrity: float      # 0..1
+    layer_stability: List[float]
+    layer_locked: List[bool]
+    capstone_placed: bool
+
     done: bool = False
