@@ -163,6 +163,9 @@ def is_success(state, goal: Goal, tol_shape: float = 0.05, tol_ramp: float = 0.0
     - Layer locks meet the goal
     - Capstone placement if required
     """
+    if getattr(state, "irreversible_error", False):
+        return False
+
     tgt = np.asarray(goal.target, dtype=np.float32)
 
     if tgt.shape[0] != state.n_layers + 4:

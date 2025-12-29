@@ -104,7 +104,12 @@ class PyramidEnv:
         a = {"wq": wq, "wh": wh, "wp": wp, "ramp_cmd": ramp_cmd, "ramp_type": ramp_type}
         next_state = step_state(self.state, a, {**self.cfg, "t_max": self.t_max})
 
-        success = is_success(next_state, self.goal)
+        raw_success = is_success(next_state, self.goal)
+        irreversible_error = bool(getattr(next_state, "irreversible_error", False))
+        phase_reached = int(getattr(next_state, "phase_reached", 0))
+        phase_failure_reason = getattr(next_state, "phase_failure_reason", None)
+
+        success = bool(raw_success and (not irreversible_error))
         done = bool(next_state.done)
 
         obs = self._obs_vec(next_state)
@@ -121,6 +126,9 @@ class PyramidEnv:
             "foundation_strength": float(next_state.foundation_strength),
             "ramp_integrity": float(next_state.ramp_integrity),
             "capstone": int(next_state.capstone_placed),
+            "phase_reached": phase_reached,
+            "phase_failure_reason": phase_failure_reason,
+            "irreversible_error": irreversible_error,
         }
 
         self.state = next_state
