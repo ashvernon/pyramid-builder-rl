@@ -77,7 +77,13 @@ def _run_capability_probes(
     if len(tier_rate_pairs) >= 2:
         tiers = np.asarray([t for t, _ in tier_rate_pairs], dtype=np.float32)
         rates = np.asarray([r for _, r in tier_rate_pairs], dtype=np.float32)
-        auc = float(np.trapz(rates, tiers) / max(1e-9, tiers[-1] - tiers[0]))
+        # numpy 2.x removed ``np.trapz`` in favor of ``np.trapezoid``; keep a
+        # small compatibility shim so either is used depending on availability.
+        trapz_fn = getattr(np, "trapz", None)
+        if trapz_fn is None:
+            trapz_fn = np.trapezoid
+
+        auc = float(trapz_fn(rates, tiers) / max(1e-9, tiers[-1] - tiers[0]))
     elif tier_rate_pairs:
         auc = float(tier_rate_pairs[0][1])
     else:
