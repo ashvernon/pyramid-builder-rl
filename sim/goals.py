@@ -13,7 +13,7 @@ GOAL_KIND_MULTI = 4
 class Goal:
     kind: int
     # target is a fixed-length vector encoded as a tuple:
-    #   [shape (n_layers), ramp_required (1)]
+    #   [foundation (1), ramp_height (1), ramp_integrity (1), locks (n_layers), capstone (1)]
     target: tuple
 
 
@@ -24,10 +24,13 @@ class Goal:
 def goal_dim(n_layers: int) -> int:
     """
     Goal vector includes:
-    - pyramid shape only (n_layers)
-    - ramp requirement (1) in *layer units*
+    - foundation strength target (1)
+    - ramp height target (1)
+    - ramp integrity target (1)
+    - layer lock targets (n_layers)
+    - capstone placement flag (1)
     """
-    return n_layers + 1
+    return n_layers + 4
 
 
 def goal_to_vec(goal: Goal, n_layers: int) -> np.ndarray:
@@ -35,8 +38,8 @@ def goal_to_vec(goal: Goal, n_layers: int) -> np.ndarray:
     Convert Goal → vector (fixed size).
     """
     v = np.asarray(goal.target, dtype=np.float32)
-    if v.shape[0] != n_layers + 1:
-        raise ValueError(f"Goal target has dim {v.shape[0]} but expected {n_layers + 1}")
+    if v.shape[0] != n_layers + 4:
+        raise ValueError(f"Goal target has dim {v.shape[0]} but expected {n_layers + 4}")
     return v
 
 
@@ -48,20 +51,28 @@ def vector_to_goal(target: np.ndarray, n_layers: int) -> Goal:
     """
 
     arr = np.asarray(target, dtype=np.float32)
-    if arr.shape[0] != n_layers + 1:
-        raise ValueError(f"Goal vector has dim {arr.shape[0]} but expected {n_layers + 1}")
+    if arr.shape[0] != n_layers + 4:
+        raise ValueError(f"Goal vector has dim {arr.shape[0]} but expected {n_layers + 4}")
     return Goal(kind=GOAL_KIND_MULTI, target=tuple(arr.tolist()))
 
 
 def achieved_goal_vec(state) -> np.ndarray:
     """
     Achieved goal includes:
-    - current pyramid shape (state.p)
+    - locked foundation strength (or current stability)
     - current ramp height (layer units)
+    - current ramp integrity
+    - stabilized/locked progress per layer
+    - capstone placement flag
     """
-    shape = np.asarray(state.p, dtype=np.float32)
-    ramp = np.asarray([float(state.ramp_height)], dtype=np.float32)
-    return np.concatenate([shape, ramp], axis=0)
+    foundation = np.asarray([float(state.foundation_strength)], dtype=np.float32)
+    ramp = np.asarray([float(state.ramp_height), float(state.ramp_integrity)], dtype=np.float32)
+    locks = np.asarray(
+        [1.0 if locked else float(state.layer_stability[i]) for i, locked in enumerate(state.layer_locked)],
+        dtype=np.float32,
+    )
+    capstone = np.asarray([1.0 if state.capstone_placed else 0.0], dtype=np.float32)
+    return np.concatenate([foundation, ramp, locks, capstone], axis=0)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -70,15 +81,11 @@ def achieved_goal_vec(state) -> np.ndarray:
 
 def sample_goal(state, rng: np.random.Generator) -> Goal:
     """
-    Tiered capability goal:
-    - Complete layers 0..tier-1
-    - Partial progress into tier
-    - Requires ramp to be high enough for that tier (learnable now)
-
-    Notes:
-    - ramp_required follows the same scaling you previously enforced in is_success:
-        ramp_height >= 0.6 * achieved_layer
-      Here we approximate achieved_layer by the sampled tier.
+    Tiered hierarchical goal:
+    - Lock foundation with sufficient strength
+    - Build and maintain a ramp with integrity
+    - Stabilize layers sequentially (locks)
+    - Optionally require capstone placement for deepest tiers
     """
     n = state.n_layers
 
@@ -92,17 +99,25 @@ def sample_goal(state, rng: np.random.Generator) -> Goal:
         )
     )
 
-    target_shape = np.zeros(n, dtype=np.float32)
+    target_layers = np.zeros(n, dtype=np.float32)
     for i in range(tier):
-        target_shape[i] = rng.uniform(0.9, 1.0)
+        target_layers[i] = rng.uniform(0.9, 1.0)
 
     if tier < n:
-        target_shape[tier] = rng.uniform(0.2, 0.6)
+        target_layers[tier] = rng.uniform(0.3, 0.7)
 
-    # NEW: ramp requirement (layer units)
-    ramp_required = 0.6 * float(tier)
+    foundation_target = rng.uniform(0.88, 0.95)
+    ramp_height_target = 0.6 * float(tier)
+    ramp_integrity_target = rng.uniform(0.65, 0.9)
 
-    target = np.concatenate([target_shape, [ramp_required]]).astype(np.float32)
+    capstone_target = 1.0 if tier >= n - 1 else 0.0
+    target = np.concatenate(
+        [
+            [foundation_target, ramp_height_target, ramp_integrity_target],
+            target_layers,
+            [capstone_target],
+        ]
+    ).astype(np.float32)
 
     return Goal(
         kind=GOAL_KIND_MULTI,
@@ -118,10 +133,20 @@ def capability_probe_goal(n_layers: int, tier: int, ramp_scale: float = 0.6) -> 
     up_to = min(tier, n_layers)
     target_shape[:up_to] = 1.0
     if tier < n_layers:
-        target_shape[tier] = 0.6  # partial fill to avoid a cliff at the boundary
+        target_shape[tier] = 0.7  # partial stabilize to create a soft boundary
 
     ramp_required = ramp_scale * float(tier)
-    target = np.concatenate([target_shape, [ramp_required]]).astype(np.float32)
+    foundation_target = 0.92
+    ramp_integrity_target = 0.8
+    capstone_target = 1.0 if tier >= n_layers - 1 else 0.0
+
+    target = np.concatenate(
+        [
+            [foundation_target, ramp_required, ramp_integrity_target],
+            target_shape,
+            [capstone_target],
+        ]
+    ).astype(np.float32)
 
     return Goal(kind=GOAL_KIND_MULTI, target=tuple(target.tolist()))
 
@@ -133,27 +158,34 @@ def capability_probe_goal(n_layers: int, tier: int, ramp_scale: float = 0.6) -> 
 def is_success(state, goal: Goal, tol_shape: float = 0.05, tol_ramp: float = 0.05) -> bool:
     """
     Success requires:
-    - Shape target reached (within tol_shape)
-    - Ramp height meets the goal's ramp requirement (within tol_ramp)
-
-    This replaces the previous hidden constraint:
-        ramp_height >= 0.6 * achieved_layer
-    by making the ramp requirement part of the goal vector, so HER can learn it.
+    - Locked foundation strength meets the goal
+    - Ramp height and integrity meet the goal
+    - Layer locks meet the goal
+    - Capstone placement if required
     """
-    cur_shape = np.asarray(state.p, dtype=np.float32)
     tgt = np.asarray(goal.target, dtype=np.float32)
 
-    if tgt.shape[0] != state.n_layers + 1:
+    if tgt.shape[0] != state.n_layers + 4:
         # Defensive: if someone passes an old-style goal, fail loudly.
         raise ValueError(
-            f"Goal target has dim {tgt.shape[0]} but expected {state.n_layers + 1}. "
+            f"Goal target has dim {tgt.shape[0]} but expected {state.n_layers + 4}. "
             "Did you rebuild goals after changing goal_dim?"
         )
 
-    target_shape = tgt[:-1]
-    target_ramp = float(tgt[-1])
+    foundation_target = float(tgt[0])
+    ramp_height_target = float(tgt[1])
+    ramp_integrity_target = float(tgt[2])
+    target_shape = tgt[3:-1]
+    capstone_target = float(tgt[-1])
 
-    shape_ok = bool(np.all(cur_shape >= target_shape - tol_shape))
-    ramp_ok = bool(float(state.ramp_height) >= target_ramp - tol_ramp)
+    locks = np.asarray(
+        [1.0 if locked else float(state.layer_stability[i]) for i, locked in enumerate(state.layer_locked)],
+        dtype=np.float32,
+    )
+    foundation_ok = bool(float(state.foundation_strength) >= foundation_target - tol_shape)
+    ramp_height_ok = bool(float(state.ramp_height) >= ramp_height_target - tol_ramp)
+    ramp_integrity_ok = bool(float(state.ramp_integrity) >= ramp_integrity_target - tol_ramp)
+    shape_ok = bool(np.all(locks >= target_shape - tol_shape))
+    capstone_ok = bool(capstone_target <= 0.0 or state.capstone_placed)
 
-    return bool(shape_ok and ramp_ok)
+    return bool(foundation_ok and ramp_height_ok and ramp_integrity_ok and shape_ok and capstone_ok)

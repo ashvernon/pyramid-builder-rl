@@ -22,6 +22,18 @@ sim:
   ramp_build_rate: 0.02
   ramp_type_base: [1.0, 0.95, 0.90, 0.85]  # none, straight, zigzag, spiral
   ramp_type_k:    [0.00, 0.25, 0.18, 0.12]
+  ramp_integrity_decay: 0.003
+
+  # Hierarchical phases
+  foundation_base_gain: 0.012
+  foundation_lock_warmup: 0.55
+  foundation_lock_threshold: 0.9
+  foundation_lock_horizon: 14
+  layer_stabilize_rate: 0.05
+  layer_lock_threshold: 0.95
+  capstone_ramp_height: 12.0
+  capstone_integrity: 0.8
+  capstone_foundation: 0.9
 
 rl:
   seed: 1
