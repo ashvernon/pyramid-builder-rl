@@ -15,7 +15,7 @@ from rl.replay import ReplayBuffer
 from rl.learner import GoalDQNAgent
 from rl.eval import run_eval
 from utils.rng import set_global_seed
-from utils.logging import JsonlLogger, ensure_dir
+from utils.logging import JsonlLogger, ensure_dir, flush, log_event
 
 
 def load_yaml(path: str) -> dict:
@@ -286,13 +286,15 @@ def main() -> None:
                 batch = replay.sample(batch_size=batch_size)
                 losses = agent.update(batch)
                 if step % 100 == 0:
-                    logger.log({
-                        "type": "train_step",
-                        "step": step,
-                        "episode": episode,
-                        "epsilon": eps,
-                        **losses,
-                    })
+                    log_event(
+                        "train_step",
+                        {
+                            "step": step,
+                            "episode": episode,
+                            "epsilon": float(eps),
+                            **losses,
+                        },
+                    )
 
             if step % int(rl_cfg["eval_every"]) == 0 and step >= warmup_steps:
                 metrics = run_eval(
@@ -345,31 +347,38 @@ def main() -> None:
             ep_success,
         )
 
-        logger.log({
-            "type": "episode",
-            "episode": episode,
-            "step": step,
-            "ep_steps": ep_steps,
-            "success": ep_success,
-            "phase_reached": int(phase_reached),
-            "phase_failure_reason": failure_reason,
-            "irreversible_error": bool(irreversible_error),
-            "max_layer": info.get("max_layer", None),
-            "final_ramp_height": float(info.get("ramp_height", 0.0)),
-            "goal_ramp_required": goal_ramp_required,
-            "max_ramp_height": float(ep_max_ramp_height),
-            "mean_ramp_height": float(ep_mean_ramp_height),
-            "ramp_cmd_counts": {
-                "none": int(ep_ramp_cmd_none),
-                "extend": int(ep_ramp_cmd_extend),
-                "switch": int(ep_ramp_cmd_switch),
-                "dismantle": int(ep_ramp_cmd_dismantle),
+        log_event(
+            "episode",
+            {
+                "episode": episode,
+                "step": step,
+                "ep_steps": ep_steps,
+                "success": ep_success,
+                "phase_reached": int(phase_reached),
+                "phase_failure_reason": failure_reason,
+                "irreversible_error": bool(irreversible_error),
+                "max_layer": info.get("max_layer", None),
+                "final_ramp_height": float(info.get("ramp_height", 0.0)),
+                "goal_ramp_required": goal_ramp_required,
+                "max_ramp_height": float(ep_max_ramp_height),
+                "mean_ramp_height": float(ep_mean_ramp_height),
+                "ramp_cmd_counts": {
+                    "none": int(ep_ramp_cmd_none),
+                    "extend": int(ep_ramp_cmd_extend),
+                    "switch": int(ep_ramp_cmd_switch),
+                    "dismantle": int(ep_ramp_cmd_dismantle),
+                },
             },
-        })
+        )
         episode += 1
+
+        if step > 0 and step % 5000 == 0:
+            flush()
 
     # ✅ always save final at end of training
     save_ckpt("final")
+
+    flush()
 
 
 if __name__ == "__main__":
