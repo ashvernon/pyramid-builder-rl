@@ -4,6 +4,8 @@ name: depth_004
 sim:
   n_layers: 32
   t_max: 600
+  ramp_build_rate: 0.10     # was 0.02
+  ramp_dismantle_rate: 0.02 # keep explicit
 
 rl:
   seed: 1
@@ -12,3 +14,5 @@ rl:
   depth: 4
   width: 256
   lr: 0.0003
+
+
