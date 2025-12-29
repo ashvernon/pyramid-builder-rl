@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Any, Optional
 
 import numpy as np
 import torch
@@ -28,9 +28,9 @@ class GoalDQNAgent:
         target_tau: float = 1.0,
         device: str | None = None,
     ):
-        self.obs_dim = obs_dim
-        self.goal_dim = goal_dim
-        self.n_actions = n_actions
+        self.obs_dim = int(obs_dim)
+        self.goal_dim = int(goal_dim)
+        self.n_actions = int(n_actions)
         self.gamma = float(gamma)
         self.target_update_every = int(target_update_every)
         self.target_tau = float(target_tau)
@@ -38,13 +38,16 @@ class GoalDQNAgent:
 
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
 
-        inp = obs_dim + goal_dim
-        self.q = ResMLP(inp, width=int(width), depth=int(depth), output_dim=n_actions).to(self.device)
-        self.q_targ = ResMLP(inp, width=int(width), depth=int(depth), output_dim=n_actions).to(self.device)
+        inp = self.obs_dim + self.goal_dim
+        self.q = ResMLP(inp, width=int(width), depth=int(depth), output_dim=self.n_actions).to(self.device)
+        self.q_targ = ResMLP(inp, width=int(width), depth=int(depth), output_dim=self.n_actions).to(self.device)
         self.q_targ.load_state_dict(self.q.state_dict())
         self.q_targ.eval()
 
         self.opt = optim.Adam(self.q.parameters(), lr=float(lr))
+
+        # Optional: track best eval so training can save "best"
+        self.best_eval_success: float = -1.0
 
     def act(self, obs: np.ndarray, goal: np.ndarray, eps: float) -> int:
         if np.random.random() < eps:
@@ -75,7 +78,7 @@ class GoalDQNAgent:
             target = reward + (1.0 - done) * self.gamma * q2
 
         loss = nn.functional.smooth_l1_loss(q, target)
-        self.opt.zero_grad()
+        self.opt.zero_grad(set_to_none=True)
         loss.backward()
         nn.utils.clip_grad_norm_(self.q.parameters(), 1.0)
         self.opt.step()
@@ -93,11 +96,81 @@ class GoalDQNAgent:
             for p, pt in zip(self.q.parameters(), self.q_targ.parameters()):
                 pt.data.mul_(1.0 - self.target_tau).add_(self.target_tau * p.data)
 
-    def save(self, path: Path):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        torch.save({"q": self.q.state_dict(), "q_targ": self.q_targ.state_dict()}, path)
+    # -----------------------
+    # Checkpointing
+    # -----------------------
 
-    def load(self, path: Path):
+    def state_dict(self) -> Dict[str, Any]:
+        """Everything needed to resume training."""
+        return {
+            "meta": {
+                "obs_dim": self.obs_dim,
+                "goal_dim": self.goal_dim,
+                "n_actions": self.n_actions,
+                "gamma": self.gamma,
+                "target_update_every": self.target_update_every,
+                "target_tau": self.target_tau,
+                "device": self.device,
+            },
+            "step_count": int(self.step_count),
+            "best_eval_success": float(self.best_eval_success),
+            "q": self.q.state_dict(),
+            "q_targ": self.q_targ.state_dict(),
+            "opt": self.opt.state_dict(),
+        }
+
+    def save(self, path: Path):
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(self.state_dict(), path)
+
+    def load(self, path: Path, *, strict: bool = True, load_opt: bool = True):
+        path = Path(path)
         ckpt = torch.load(path, map_location=self.device)
-        self.q.load_state_dict(ckpt["q"])
-        self.q_targ.load_state_dict(ckpt["q_targ"])
+
+        self.q.load_state_dict(ckpt["q"], strict=strict)
+        self.q_targ.load_state_dict(ckpt["q_targ"], strict=strict)
+
+        self.step_count = int(ckpt.get("step_count", 0))
+        self.best_eval_success = float(ckpt.get("best_eval_success", -1.0))
+
+        if load_opt and "opt" in ckpt:
+            try:
+                self.opt.load_state_dict(ckpt["opt"])
+            except Exception:
+                # Optimizer state can fail to load if hyperparams/param groups changed
+                pass
+
+        # Ensure correct modes
+        self.q.train()
+        self.q_targ.eval()
+
+    def maybe_save(
+        self,
+        ckpt_dir: Path,
+        *,
+        step: int,
+        save_every: int = 10_000,
+        eval_success_rate: Optional[float] = None,
+        prefix: str = "agent",
+    ) -> Dict[str, str]:
+        """
+        Convenience helper:
+        - saves periodic checkpoints every `save_every` steps
+        - saves best checkpoint if eval_success_rate improves
+        """
+        ckpt_dir = Path(ckpt_dir)
+        saved: Dict[str, str] = {}
+
+        if save_every > 0 and (step % save_every == 0):
+            p = ckpt_dir / f"{prefix}_step_{step}.pt"
+            self.save(p)
+            saved["periodic"] = str(p)
+
+        if eval_success_rate is not None and eval_success_rate > self.best_eval_success:
+            self.best_eval_success = float(eval_success_rate)
+            p = ckpt_dir / f"{prefix}_best.pt"
+            self.save(p)
+            saved["best"] = str(p)
+
+        return saved

@@ -39,8 +39,20 @@ def main() -> None:
     cfg = deep_update(base, exp)
 
     exp_name = exp.get("name", Path(args.exp).stem)
+
     out_dir = Path(args.out) / exp_name
     ensure_dir(out_dir)
+
+    # ✅ Make checkpoint dir absolute (anchored to this file), so saves always land in your repo
+    repo_root = Path(__file__).resolve().parent
+    checkpoint_dir = (repo_root / "checkpoints" / exp_name).resolve()
+    ensure_dir(checkpoint_dir)
+    print(f"[CKPT] checkpoint_dir = {checkpoint_dir}")
+
+    def save_ckpt(tag: str) -> None:
+        p = checkpoint_dir / f"{tag}.pt"
+        agent.save(p)
+        print(f"[CKPT] saved {tag} -> {p}")
 
     sim_cfg = cfg["sim"]
     rl_cfg = cfg["rl"]
@@ -89,17 +101,20 @@ def main() -> None:
     step = 0
     episode = 0
 
+    # ✅ Track best model by eval_success_rate
+    best_success = -1.0
+
     while step < total_steps:
         obs, goal = env.reset()
         done = False
         ep_steps = 0
         ep_success = 0
 
-        # NEW: episode-level ramp tracking (final can be 0 if dismantled late)
+        # episode-level ramp tracking (final can be 0 if dismantled late)
         ep_max_ramp_height = 0.0
         ep_mean_ramp_height_sum = 0.0
 
-        # NEW: episode-level ramp command stats (helps debug whether policy ever tries extend)
+        # episode-level ramp command stats
         ep_ramp_cmd_extend = 0
         ep_ramp_cmd_dismantle = 0
         ep_ramp_cmd_switch = 0
@@ -113,7 +128,6 @@ def main() -> None:
                 action = agent.act(obs, goal, eps=eps)
 
             next_obs, next_goal, done, info = env.step(action)
-
             achieved_next = info["achieved_goal"]
 
             replay.add(
@@ -125,7 +139,7 @@ def main() -> None:
                 achieved_next=achieved_next,
             )
 
-            # NEW: ramp tracking + ramp-cmd decode from action_id
+            # ramp tracking + ramp-cmd decode from action_id
             ramp_h = float(info.get("ramp_height", 0.0))
             ep_max_ramp_height = max(ep_max_ramp_height, ramp_h)
             ep_mean_ramp_height_sum += ramp_h
@@ -166,10 +180,22 @@ def main() -> None:
                     "step": step,
                     **metrics,
                 })
-                # TODO: agent.save(Path("checkpoints")/exp_name/"latest.pt")
 
-        # NEW: log goal ramp requirement (last dim of goal), plus episode ramp stats
-        goal_ramp_required = float(goal[-1]) if getattr(goal, "shape", None) is not None and goal.shape[0] >= 1 else None
+                # ✅ always save latest
+                save_ckpt("latest")
+
+                # ✅ save best by eval_success_rate
+                sr = float(metrics.get("eval_success_rate", -1.0))
+                if sr > best_success:
+                    best_success = sr
+                    save_ckpt("best")
+
+        # log goal ramp requirement (last dim of goal), plus episode ramp stats
+        goal_ramp_required = (
+            float(goal[-1])
+            if getattr(goal, "shape", None) is not None and goal.shape[0] >= 1
+            else None
+        )
         ep_mean_ramp_height = (ep_mean_ramp_height_sum / max(1, ep_steps)) if ep_steps > 0 else 0.0
 
         logger.log({
@@ -180,8 +206,6 @@ def main() -> None:
             "success": ep_success,
             "max_layer": info.get("max_layer", None),
             "final_ramp_height": float(info.get("ramp_height", 0.0)),
-
-            # NEW fields
             "goal_ramp_required": goal_ramp_required,
             "max_ramp_height": float(ep_max_ramp_height),
             "mean_ramp_height": float(ep_mean_ramp_height),
@@ -193,6 +217,9 @@ def main() -> None:
             },
         })
         episode += 1
+
+    # ✅ always save final at end of training
+    save_ckpt("final")
 
 
 if __name__ == "__main__":
